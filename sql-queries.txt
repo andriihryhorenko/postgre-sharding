@@ -1,0 +1,117 @@
+Common:
+
+
+CREATE DATABASE usersdb
+    WITH
+    OWNER = postgres
+    ENCODING = 'UTF8'
+    LC_COLLATE = 'en_US.utf8'
+    LC_CTYPE = 'en_US.utf8'
+    TABLESPACE = pg_default
+    CONNECTION LIMIT = -1
+    IS_TEMPLATE = False;
+
+
+Insanse 1 (Shard 1):
+
+CREATE TABLE IF NOT EXISTS public."Users_1"
+(
+    "Id" int PRIMARY KEY,
+    "UserName" text COLLATE pg_catalog."default" NOT NULL,
+    "BirthDate" timestamp without time zone NOT NULL  CHECK ("BirthDate" > '1995-01-01' AND "BirthDate" < '2000-01-01'),
+    "CreateTime" timestamp without time zone NOT NULL,
+    "UniqueName" text COLLATE pg_catalog."default" NOT NULL
+)
+
+CREATE INDEX birth_idx ON "Users_1" USING btree("BirthDate")
+
+
+
+Insanse 2 (Shard 2):
+
+CREATE TABLE IF NOT EXISTS public."Users_2"
+(
+    "Id" int PRIMARY KEY,
+    "UserName" text COLLATE pg_catalog."default" NOT NULL,
+    "BirthDate" timestamp without time zone NOT NULL  CHECK ("BirthDate" > '2000-01-01' AND "BirthDate" < '2010-01-01'),
+    "CreateTime" timestamp without time zone NOT NULL,
+    "UniqueName" text COLLATE pg_catalog."default" NOT NULL
+)
+
+CREATE INDEX birth_idx ON "Users_2" USING btree("BirthDate")
+
+
+Insanse 3 (Main):
+
+CREATE TABLE IF NOT EXISTS public."Users"
+(
+    "Id" bigint PRIMARY KEY ,
+    "UserName" text COLLATE pg_catalog."default" NOT NULL,
+    "BirthDate" timestamp without time zone NOT NULL,
+    "CreateTime" timestamp without time zone NOT NULL,
+    "UniqueName" text COLLATE pg_catalog."default" NOT NULL
+)
+
+CREATE INDEX birth_idx ON "Users" USING btree("BirthDate")
+
+
+CREATE EXTENSION postgres_fdw;
+
+CREATE SERVER users_1_server 
+FOREIGN DATA WRAPPER postgres_fdw 
+OPTIONS( host 'host.docker.internal', port '5433', dbname 'usersdb' );
+
+CREATE SERVER users_2_server 
+FOREIGN DATA WRAPPER postgres_fdw 
+OPTIONS( host 'host.docker.internal', port '5434', dbname 'usersdb' );
+
+CREATE USER MAPPING FOR "postgres"
+SERVER users_1_server
+OPTIONS (user 'postgres', password 'postgres');
+
+
+CREATE USER MAPPING FOR "postgres"
+SERVER users_2_server
+OPTIONS (user 'postgres', password 'postgres');
+
+
+CREATE FOREIGN TABLE Users_1 (
+    "Id" bigint not null,
+    "UserName" text COLLATE pg_catalog."default" NOT NULL,
+    "BirthDate" timestamp without time zone NOT NULL,
+    "CreateTime" timestamp without time zone NOT NULL,
+    "UniqueName" text COLLATE pg_catalog."default" NOT NULL
+)
+SERVER users_1_server
+OPTIONS (schema_name 'public', table_name 'Users_1');
+
+CREATE FOREIGN TABLE Users_2 (
+    "Id" bigint not null,
+    "UserName" text COLLATE pg_catalog."default" NOT NULL,
+    "BirthDate" timestamp without time zone NOT NULL,
+    "CreateTime" timestamp without time zone NOT NULL,
+    "UniqueName" text COLLATE pg_catalog."default" NOT NULL
+)
+SERVER users_2_server
+OPTIONS (schema_name 'public', table_name 'Users_2');
+
+------------view
+
+CREATE VIEW Users AS
+	SELECT * FROM "Users"
+		UNION ALL
+	SELECT * FROM "users_1"
+		UNION ALL
+	SELECT * FROM "users_2"
+
+-------------rules
+
+
+
+CREATE RULE users_insert_to_1 AS ON INSERT TO "Users"
+WHERE ("BirthDate" > '1995-01-01' AND "BirthDate" < '2000-01-01')
+DO INSTEAD INSERT INTO users_1 VALUES (NEW.*)
+
+CREATE RULE users_insert_to_2 AS ON INSERT TO "Users"
+WHERE ("BirthDate" > '2000-01-01' AND "BirthDate" < '2010-01-01')
+DO INSTEAD INSERT INTO users_2 VALUES (NEW.*)
